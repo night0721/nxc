@@ -1,0 +1,15 @@
+{
+  "Version": "15.0.1",
+  "Name": "NXC Paste Hosting",
+  "DestinationType": "TextUploader",
+  "RequestMethod": "POST",
+  "RequestURL": "http://nxc.night0721.xyz/api/paste",
+  "Headers": {
+    "key": ""
+  },
+  "Body": "JSON",
+  "Data": "{\"content\":\"{input}\"}",
+  "URL": "{json:url}",
+  "DeletionURL": "{json:deleteUrl}",
+  "ErrorMessage": "{json:message}"
+}

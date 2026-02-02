@@ -1,0 +1,31 @@
+#!/bin/sh
+
+# Load environment variables
+[ -f .env ] && . ./.env
+export SESSION_SECRET="$(openssl rand -hex 32)"
+
+if [ ! -f "backend/nxs" ]; then
+    echo "Backend binary (nxs) missing. Building..."
+    cd backend
+    cargo build --release
+    mv target/release/nxs ./nxs
+    cargo clean 
+    cd ..
+else
+    echo "Backend binary found. Skipping build."
+fi
+
+if [ ! -d "backend/build" ]; then
+    echo "Frontend build missing. Building..."
+    cd frontend
+    npm run build
+    mv build ../backend
+    cd ..
+else
+    echo "Frontend build found. Skipping build."
+fi
+
+cd backend
+echo "Starting server..."
+
+./nxs

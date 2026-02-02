@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - NightX Client File Uploader</title>
+    <link rel="stylesheet" href="//unpkg.com/@catppuccin/highlightjs@1.0.1/css/catppuccin-mocha.css">
+    
+    <style>
+        :root {
+            --base: #24273a;
+            --surface: #363a4f;
+            --text: #cad3f5;
+            --subtext: #a5adcb;
+            --mauve: #c6a0f6;
+            --blue: #8aadf4;
+            --peach: #f5a97f;
+        }
+
+        body {
+            background-color: var(--base);
+            color: var(--text);
+            font-family: 'Inter', -apple-system, sans-serif;
+            margin: 0;
+            padding: 2rem;
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--surface);
+            padding-bottom: 1rem;
+        }
+
+        .title-area h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            color: var(--mauve);
+        }
+
+        .meta {
+            font-size: 0.85rem;
+            color: var(--subtext);
+        }
+
+        .badge {
+            background: var(--surface);
+            color: var(--blue);
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.8rem;
+            margin-right: 10px;
+        }
+
+        pre {
+            margin: 0;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        code {
+            font-family: 'Fira Code', 'JetBrains Mono', monospace !important;
+            font-size: 0.95rem !important;
+            padding: 1.5rem !important;
+        }
+
+        /* Custom scrollbar for Catppuccin */
+        code::-webkit-scrollbar { width: 10px; height: 10px; }
+        code::-webkit-scrollbar-track { background: var(--base); }
+        code::-webkit-scrollbar-thumb { background: var(--surface); border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <div class="title-area">
+            <h1>{{ title }}</h1>
+            <div class="meta">
+                Created: {{ created_at }}
+            </div>
+        </div>
+        <div>
+            <span class="badge">{{ syntax }}</span>
+        </div>
+    </div>
+
+    <pre><code class="language-{{ syntax }}">{{ content }}</code></pre>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+    // Initialize highlighting
+    hljs.highlightAll();
+</script>
+
+</body>
+</html>
