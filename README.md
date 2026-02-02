@@ -20,30 +20,32 @@ You would need to fill .env.example then rename it to .env for the backend serve
 * **GET** `/auth/github/login` — Initiates GitHub OAuth2 flow.
 * **GET** `/auth/github/callback` — Handles the redirection from GitHub and exchanges the code for a token.
 * **GET** `/auth/me` — Returns the currently authenticated user's profile.
+* **POST** `/auth/logout` — Invalidates the session and clears the cookie.
 
 ### URL Shortener
 
-* **POST** `/api/url` — Creates a new short link.
+* **POST** `/` — Creates a new short link (by providing the `url` field).
 * **GET** `/s/:slug` — Redirects the browser to the original long URL.
 
 ### Pastebin
 
-* **POST** `/api/paste` — Submits a new paste.
-* **GET** `/p/:slug` — Displays the highlighted paste.
-* **GET** `/p/raw/:slug` — Returns the raw text content of the paste.
+* **POST** `/` — Submits a new paste (by providing the `content` field).
+* **GET** `/i/:slug` — Displays the highlighted paste in the web viewer.
+* **GET** `/i/raw/:slug` — Returns the raw text content of the paste.
 
 ### Files & Images
 
-* **POST** `/api/file` — Uploads a single file/image (Multipart).
-* **GET** `/i/:slug` — Displays the file/image.
-* **GET** `/i/bin/:slug` — Direct file/image downloading.
+* **POST** `/` — Uploads a single file/image via Multipart (by providing the `file` field).
+* **GET** `/i/:slug` — Displays the file/image/code in the web viewer.
+* **GET** `/i/raw/:slug` — Serves the raw file with the original mime-type.
+* **GET** `/i/bin/:slug` — Direct file/image download as attachment.
 
 ### Management
 
 * **GET** `/api/urls` — Lists all short URLs owned by the current user.
-* **GET** `/api/pastes` — Lists all pastes owned by the current user.
-* **GET** `/api/files` — Lists all uploaded files owned by the current user.
-* **POST** `/api/:kind/delete` — Deletes a record by type(where :kind is url, paste, or file)
+* **GET** `/api/files` — Lists all uploaded files and pastes owned by the current user.
+* **POST** `/api/:kind/delete` — Deletes a record by type (where `:kind` is `url` or `file`).
+* **POST** `/api/webhooks` — Registers a Discord webhook for upload notifications.
 
 # Building
 You will need to run these with elevated privilages.

@@ -195,8 +195,9 @@
                     <br>
                     <pre>You can either enter text below and click submit to create a link or use CURL/other http client to send POST request for creating links</pre>
                     <pre>CURL example:</pre>
-                    <code>curl -F"file=@file.png" https://nxc.night0721.xyz/api/file</code>
+                    <code>curl -F"file=@file.png" -F "expires_at=2026-02-15T12:00" -F "password=mysecurepass" https://nxc.night0721.xyz/</code>
                     <pre>Server will respond with a JSON object with URL to view file or download file</pre>
+					<pre>If you don't include title, filename would be used as title</pre>
                 {/if}
 
                 <!-- Paste Creation -->
@@ -229,7 +230,7 @@
                     <br>
                     <pre>You can either enter text below and click submit to create a link or use CURL/other http client to send POST request for creating links</pre>
                     <pre>CURL example:</pre>
-                    <code>{"curl https://nxc.night0721.xyz/api/paste -H \"Content-Type: application/json\" -d '{\"title\": \"Title\", \"content\":\"Test\", \"syntax\": \"plaintext\"}'"}</code>
+                    <code>"curl -F "content=console.log('hi');" -F "title=script.js" -F "syntax=javascript" https://nxc.night0721.xyz/</code>
                     <pre>Server will respond with a JSON object with URL to view file or download file</pre>
                 {/if}
 
@@ -255,7 +256,7 @@
                     <br>
                     <pre>You can either enter text below and click submit to create a link or use CURL/other http client to send POST request for creating links</pre>
                     <pre>CURL example:</pre>
-                    <code>{"curl https://nxc.night0721.xyz/api/url -H \"Content-Type: application/json\" -d '{\"url\": \"https://night0721.xyz\"}'"}</code>
+                    <code>curl -F "url=https://github.com/night0721" -F "password=protected" https://nxc.night0721.xyz/</code>
                     <pre>Server will respond with a JSON object with URL to shortened link</pre>
                 {/if}
             </div>
