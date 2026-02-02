@@ -22,12 +22,11 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::types::chrono::{NaiveDateTime, Utc};
 use std::fs;
-use std::io::Write;
 use std::path::Path as FsPath;
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::fs::File as TokioFile;
-use tokio::io::AsyncReadExt;
+use tokio_util::io::ReaderStream;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -542,31 +541,42 @@ async fn upload_file(
     let owner_id = auth.map(|a| a.user_id);
     let slug = gen_slug(7);
 
-    let mut filename = None;
     let mut mime = "application/octet-stream".to_string();
-    let mut data: Vec<u8> = Vec::new();
+    let mut full_path = std::path::PathBuf::new();
+    let mut size_bytes = 0;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid multipart"))?
     {
         if field.name() == Some("file") {
-            filename = field.file_name().map(|s| s.to_string());
+            let filename = field.file_name().map(|s| s.to_string());
             if let Some(ct) = field.content_type() {
                 mime = ct.to_string();
             }
-            data = field
-                .bytes()
+            let dir = FsPath::new(&state.config.data_dir).join(&slug);
+            fs::create_dir_all(&dir)
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
+            let fname = filename.clone().unwrap_or_else(|| format!("{slug}"));
+            full_path = dir.join(&fname);
+            let mut f = TokioFile::create(&full_path)
+                .await
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
+
+            // Stream chunk from field to f
+            while let Some(chunk) = field
+                .chunk()
                 .await
                 .map_err(|_| (StatusCode::BAD_REQUEST, "read error"))?
-                .to_vec();
+            {
+                tokio::io::copy(&mut &chunk[..], &mut f)
+                    .await
+                    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "write error"))?;
+                size_bytes += chunk.len() as i64;
+            }
             break;
         }
-    }
-
-    if data.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "missing file"));
     }
 
     // determine kind
@@ -579,15 +589,9 @@ async fn upload_file(
     }
     .to_string();
 
-    let dir = FsPath::new(&state.config.data_dir).join("files");
-    fs::create_dir_all(&dir).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
-    let fname = filename.unwrap_or_else(|| format!("{slug}"));
-    let full_path = dir.join(&fname);
-
-    let mut f = fs::File::create(&full_path)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
-    f.write_all(&data)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
+    if size_bytes == 0 {
+        return Err((StatusCode::BAD_REQUEST, "empty file"));
+    }
 
     // Generate UUID v4 using rand
     let mut bytes = [0u8; 16];
@@ -602,7 +606,7 @@ async fn upload_file(
         path: full_path.to_string_lossy().to_string(),
         kind,
         mime_type: mime.clone(),
-        size_bytes: data.len() as i64,
+        size_bytes,
         is_temp: false,
         password_hash: None,
         delete_at: None,
@@ -661,13 +665,11 @@ async fn serve_file(
     mime_type: &str,
     as_attachment: bool,
 ) -> Result<Response, (StatusCode, &'static str)> {
-    let mut file = TokioFile::open(path)
+    let file = TokioFile::open(path)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, "file missing"))?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "read error"))?;
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -682,7 +684,7 @@ async fn serve_file(
         );
     }
 
-    Ok((headers, Body::from(buf)).into_response())
+    Ok((headers, body).into_response())
 }
 
 // List files
@@ -738,21 +740,44 @@ struct DeleteBody {
 
 async fn delete_any(
     State(state): State<Arc<AppState>>,
+    auth: AuthCtx,
     Path(kind): Path<String>,
     Json(body): Json<DeleteBody>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    let user_id = auth.user_id;
+
     match kind.as_str() {
         "file" => {
-            if let Some(rec) = state
+            let rec = state
+                .db
+                .get_file_by_slug(&body.id)
+                .await
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
+                .ok_or((StatusCode::NOT_FOUND, "not found"))?;
+
+            if rec.owner_id != Some(user_id) {
+                return Err((StatusCode::FORBIDDEN, "denied"));
+            }
+
+            state
                 .db
                 .delete_file_by_slug(&body.id)
                 .await
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
-            {
-                let _ = fs::remove_file(&rec.path);
-            }
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
+            let _ = fs::remove_file(&rec.path);
         }
         "paste" => {
+            let rec = state
+                .db
+                .get_paste_by_slug(&body.id)
+                .await
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
+                .ok_or((StatusCode::NOT_FOUND, "not found"))?;
+
+            if rec.owner_id != Some(user_id) {
+                return Err((StatusCode::FORBIDDEN, "denied"));
+            }
+
             state
                 .db
                 .delete_paste_by_slug(&body.id)
@@ -760,6 +785,17 @@ async fn delete_any(
                 .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
         }
         "url" => {
+            let rec = state
+                .db
+                .get_url_by_slug(&body.id)
+                .await
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
+                .ok_or((StatusCode::NOT_FOUND, "not found"))?;
+
+            if rec.owner_id != Some(user_id) {
+                return Err((StatusCode::FORBIDDEN, "denied"));
+            }
+
             state
                 .db
                 .delete_url_by_slug(&body.id)
