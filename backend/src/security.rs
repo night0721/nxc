@@ -53,11 +53,6 @@ pub struct AuthCtx {
     pub user_id: Uuid,
 }
 
-#[derive(Clone)]
-pub struct SharedSecrets {
-    pub config: Arc<AppConfig>,
-}
-
 #[async_trait]
 impl<S> FromRequestParts<S> for AuthCtx
 where
