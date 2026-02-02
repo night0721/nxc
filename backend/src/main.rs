@@ -3,6 +3,7 @@ mod db;
 mod models;
 mod routes;
 mod security;
+mod webhooks;
 
 use crate::config::AppConfig;
 use crate::db::Db;

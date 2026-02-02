@@ -44,6 +44,29 @@
             console.error("Failed to logout:", e);
         }
     }
+
+    export async function addWebhook(url: String) {
+        await fetch(`${backendUrl}/api/webhooks`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({target_url: url})
+        });
+    }
+
+    let showWebhookInput = $state(false);
+    let webhookUrl = $state("");
+
+    export async function submitWebhook() {
+        if (!webhookUrl.startsWith("https://discord.com/api/webhooks/")) {
+            alert("Please input a valid Discord webhook link.");
+            return;
+        }
+
+        await addWebhook(webhookUrl);
+        webhookUrl = "";
+        showWebhookInput = false;
+        alert("Webhook added! Check Discord.");
+    }
 </script>
 
 <svelte:head>
@@ -51,34 +74,34 @@
     <meta http-equiv="content-type" content="text/html; charset=UTF-8">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/png" href="/night.jpg" />
+    <link rel="icon" type="image/png" href="/night.jpg"/>
 
-<!--    HTML Meta Tags-->
-    <meta name="theme-color" content="#deb4d1" data-react-helmet="true" />
-    <meta name="description" content={oembed.bio} />
+    <!--    HTML Meta Tags-->
+    <meta name="theme-color" content="#deb4d1" data-react-helmet="true"/>
+    <meta name="description" content={oembed.bio}/>
 
-<!--     Google / Search Engine Tags-->
-    <meta itemProp="name" content={oembed.title} />
-    <meta itemProp="description" content={oembed.bio} />
-    <meta itemProp="image" content={oembed.author_url} />
+    <!--     Google / Search Engine Tags-->
+    <meta itemProp="name" content={oembed.title}/>
+    <meta itemProp="description" content={oembed.bio}/>
+    <meta itemProp="image" content={oembed.author_url}/>
 
-<!--    Facebook Meta Tags-->
-    <meta property="og:url" content={oembed.provider_url} />
-    <meta property="og:type" content="website" />
-    <meta property="og:title" content={oembed.title} />
-    <meta property="og:site_name" content={oembed.provider_name} />
-    <meta property="og:description" content={oembed.bio} />
-    <meta property="og:image" content={oembed.author_url} />
+    <!--    Facebook Meta Tags-->
+    <meta property="og:url" content={oembed.provider_url}/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:title" content={oembed.title}/>
+    <meta property="og:site_name" content={oembed.provider_name}/>
+    <meta property="og:description" content={oembed.bio}/>
+    <meta property="og:image" content={oembed.author_url}/>
 
-<!--    Twitter Meta Tags-->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content={oembed.title} />
-    <meta name="twitter:description" content={oembed.bio} />
-    <meta name="twitter:image" content={oembed.author_url} />
-    <meta name="twitter:image:src" content={oembed.author_url} />
-    <meta content="video.other" property="og:type" />
-    <meta content="image/gif" property="og:image:type" />
-    <link type="application/json+oembed" href="/frontend/src/lib/oembed.json" />
+    <!--    Twitter Meta Tags-->
+    <meta name="twitter:card" content="summary_large_image"/>
+    <meta name="twitter:title" content={oembed.title}/>
+    <meta name="twitter:description" content={oembed.bio}/>
+    <meta name="twitter:image" content={oembed.author_url}/>
+    <meta name="twitter:image:src" content={oembed.author_url}/>
+    <meta content="video.other" property="og:type"/>
+    <meta content="image/gif" property="og:image:type"/>
+    <link type="application/json+oembed" href="/frontend/src/lib/oembed.json"/>
 </svelte:head>
 
 <div class="app">
@@ -95,13 +118,28 @@
 
                 <div class="header-actions">
                     {#if user}
-                        <div class="header-actions">
-                            <div class="user-avatar">{user.username.charAt(0).toUpperCase()}</div>
-                            <span class="username">{user.username}</span>
-                            <button class="btn btn-red btn-small" onclick={logout}>
-                                Logout
+                        <div class="user-avatar">{user.username.charAt(0).toUpperCase()}</div>
+                        <span class="username">{user.username}</span>
+                        {#if showWebhookInput}
+                            <div class="webhook-mini-form">
+                                <input
+                                        type="text"
+                                        bind:value={webhookUrl}
+                                        placeholder="Discord Webhook URL..."
+                                        class="webhook-input"
+                                />
+                                <button class="btn btn-primary btn-small" onclick={submitWebhook}>Save</button>
+                                <button class="btn btn-red btn-small" onclick={() => showWebhookInput = false}>X
+                                </button>
+                            </div>
+                        {:else}
+                            <button class="btn btn-primary" onclick={() => showWebhookInput = true}>
+                                Add Webhook
                             </button>
-                        </div>
+                        {/if}
+                        <button class="btn btn-red btn-small" onclick={logout}>
+                            Logout
+                        </button>
                     {:else}
                         <button class="btn btn-primary" onclick={login}>
                             Login
@@ -118,7 +156,8 @@
 
     <footer>
         <div class="container">
-            <p>Made with &hearts; on <a href="https://github.com/night0721/nxc" target="_blank" rel="noopener noreferrer">GitHub</a></p>
+            <p>Made with &hearts; on <a href="https://github.com/night0721/nxc" target="_blank"
+                                        rel="noopener noreferrer">GitHub</a></p>
         </div>
     </footer>
 </div>

@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS urls (
 CREATE TABLE IF NOT EXISTS webhooks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    target_url TEXT NOT NULL,
+    target_url TEXT UNIQUE NOT NULL,
     secret TEXT NOT NULL,
     events TEXT[] NOT NULL,
     active BOOLEAN NOT NULL DEFAULT TRUE,

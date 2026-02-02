@@ -70,8 +70,8 @@ impl Db {
                WHERE id = $1"#,
             id
         )
-            .fetch_optional(&self.pool)
-            .await?;
+        .fetch_optional(&self.pool)
+        .await?;
 
         Ok(user)
     }
@@ -156,7 +156,7 @@ impl Db {
             .fetch_all(&self.pool)
             .await?
         } else {
-           vec![]
+            vec![]
         };
         Ok(rows)
     }
@@ -277,7 +277,6 @@ impl Db {
         Ok(rec)
     }
 
-    // TODO: webhooks are left for future extension
     pub async fn insert_webhook(&self, webhook: &WebhookRecord) -> Result<WebhookRecord> {
         let rec = sqlx::query_as!(
             WebhookRecord,
@@ -296,5 +295,23 @@ impl Db {
         .fetch_one(&self.pool)
         .await?;
         Ok(rec)
+    }
+
+    pub async fn get_active_webhooks_for_event(
+        &self,
+        owner_id: Option<uuid::Uuid>,
+        event: &str,
+    ) -> Result<Vec<WebhookRecord>> {
+        let recs = sqlx::query_as!(
+            WebhookRecord,
+            r#"SELECT id, owner_id, target_url, secret, events, active, created_at
+               FROM webhooks
+               WHERE owner_id = $1 AND active = true AND $2 = ANY(events)"#,
+            owner_id,
+            event
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(recs)
     }
 }

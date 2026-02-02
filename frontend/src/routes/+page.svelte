@@ -1,7 +1,7 @@
 <script lang="ts">
     import {onMount} from "svelte";
 
-    const backendUrl = import.meta.env.VITE_NXC_BACKEND || "http://localhost:5222";
+    const backendUrl = import.meta.env.VITE_NXC_BACKEND || "https://nxc.night0721.xyz";
 
     type File = {
         slug: string;

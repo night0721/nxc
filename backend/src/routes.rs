@@ -1,6 +1,6 @@
 use crate::config::AppConfig;
 use crate::db::Db;
-use crate::models::FileRecord;
+use crate::models::{FileRecord, WebhookRecord};
 use crate::security::{
     build_session_cookie, hash_password, verify_password, AuthCtx, SessionClaims,
 };
@@ -83,6 +83,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/pastes", get(list_pastes))
         .route("/api/urls", get(list_urls))
         .route("/api/:kind/delete", post(delete_any))
+        .route("/api/webhooks", post(create_webhook))
         .with_state(state.clone())
         .fallback_service(serve_dir)
         .layer(
@@ -329,6 +330,21 @@ async fn create_url(
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
 
+    let msg = format!("New url created: {}/s/{}", state.config.base_url, rec.slug);
+
+    let hooks = state
+        .db
+        .get_active_webhooks_for_event(owner_id, "paste.created")
+        .await
+        .map_err(|e| {
+            tracing::error!("Webhook fetch error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to fetch webhooks",
+            )
+        })?;
+    crate::webhooks::dispatch(hooks, "url.created".to_string(), rec.clone(), msg);
+
     let short_url = format!("{}/s/{}", state.config.base_url, rec.slug);
 
     Ok((
@@ -427,6 +443,24 @@ async fn create_paste(
         )
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
+
+    let msg = format!(
+        "New paste created: {}/p/{}",
+        state.config.base_url, rec.slug
+    );
+
+    let hooks = state
+        .db
+        .get_active_webhooks_for_event(owner_id, "paste.created")
+        .await
+        .map_err(|e| {
+            tracing::error!("Webhook fetch error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to fetch webhooks",
+            )
+        })?;
+    crate::webhooks::dispatch(hooks, "paste.created".to_string(), rec.clone(), msg);
 
     let url = format!("{}/p/{}", state.config.base_url, rec.slug);
     let raw_url = format!("{}/p/raw/{}", state.config.base_url, rec.slug);
@@ -619,6 +653,21 @@ async fn upload_file(
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
 
+    let msg = format!("New file created: {}/i/{}", state.config.base_url, rec.slug);
+
+    let hooks = state
+        .db
+        .get_active_webhooks_for_event(owner_id, "paste.created")
+        .await
+        .map_err(|e| {
+            tracing::error!("Webhook fetch error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to fetch webhooks",
+            )
+        })?;
+    crate::webhooks::dispatch(hooks, "file.created".to_string(), rec.clone(), msg);
+
     let url = format!("{}/i/{}", state.config.base_url, rec.slug);
     let raw_url = format!("{}/i/bin/{}", state.config.base_url, rec.slug);
 
@@ -806,4 +855,49 @@ async fn delete_any(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct CreateWebhookBody {
+    pub target_url: String,
+}
+
+pub async fn create_webhook(
+    State(state): State<Arc<AppState>>,
+    auth: AuthCtx,
+    Json(body): Json<CreateWebhookBody>,
+) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    let user_id = auth.user_id;
+
+    if !body
+        .target_url
+        .starts_with("https://discord.com/api/webhooks/")
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Only Discord webhooks are supported for now",
+        ));
+    }
+
+    let new_hook = WebhookRecord {
+        id: uuid::Uuid::new_v4(),
+        owner_id: user_id,
+        target_url: body.target_url,
+        secret: gen_slug(32),
+        events: vec![
+            "url.created".to_string(),
+            "paste.created".to_string(),
+            "file.created".to_string(),
+        ],
+        active: true,
+        created_at: chrono::Utc::now(),
+    };
+
+    state
+        .db
+        .insert_webhook(&new_hook)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save webhook"))?;
+
+    Ok(StatusCode::CREATED)
 }
