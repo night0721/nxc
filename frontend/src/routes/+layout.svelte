@@ -3,16 +3,9 @@
     import "../app.css";
     import oembed from "$lib/oembed.json";
 
-    type User = {
-        provider: string;
-        provider_id: string;
-        username: string;
-        avatar_url: string;
-        created_at: string;
-    };
+    import {userState} from "$lib/User.svelte.ts";
 
     let {children} = $props();
-    let user: User | null = $state(null);
 
     const backendUrl = import.meta.env.VITE_NXC_BACKEND || "https://nxc.night0721.xyz";
 
@@ -22,10 +15,10 @@
                 credentials: "include"
             });
             if (response.ok) {
-                user = await response.json();
+                userState.user = await response.json();
             } else if (response.status === 401) {
                 console.warn("User is not logged in");
-                user = null;
+                userState.user = null;
             }
         } catch (e) {
             console.error("Failed to fetch user: ", e);
@@ -39,14 +32,14 @@
     export async function logout() {
         try {
             const response = await fetch(`${backendUrl}/auth/logout`, {
-            method: "POST",
-            credentials: "include"
-        });
+                method: "POST",
+                credentials: "include"
+            });
 
-        if (response.ok) {
-            user = null;
-            window.location.href = "/";
-        }
+            if (response.ok) {
+                userState.user = null;
+                window.location.href = "/";
+            }
         } catch (e) {
             console.error("Failed to logout:", e);
         }
@@ -55,7 +48,7 @@
     export async function addWebhook(url: String) {
         await fetch(`${backendUrl}/api/webhooks`, {
             method: "POST",
-			credentials: "include",
+            credentials: "include",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({target_url: url})
         });
@@ -125,9 +118,9 @@
                 <!--<a href="/features">Features</a>-->
 
                 <div class="header-actions">
-                    {#if user}
-                        <div class="user-avatar">{user.username.charAt(0).toUpperCase()}</div>
-                        <span class="username">{user.username}</span>
+                    {#if userState.user}
+                        <div class="user-avatar">{userState.user.username.charAt(0).toUpperCase()}</div>
+                        <span class="username">{userState.user.username}</span>
                         {#if showWebhookInput}
                             <div class="webhook-mini-form">
                                 <input

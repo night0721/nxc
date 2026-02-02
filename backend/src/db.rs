@@ -1,4 +1,4 @@
-use crate::models::{FileRecord, PasteRecord, UrlRecord, UserRecord, WebhookRecord};
+use crate::models::{FileRecord, UrlRecord, UserRecord, WebhookRecord};
 use anyhow::Result;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::time::Duration;
@@ -80,17 +80,17 @@ impl Db {
         let rec = sqlx::query_as!(
             FileRecord,
             r#"INSERT INTO files
-                (id, owner_id, slug, path, kind, mime_type, size_bytes, is_temp, password_hash, delete_at, created_at)
+                (id, owner_id, slug, path, mime_type, size_bytes, title, syntax, password_hash, delete_at, created_at)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-               RETURNING id, owner_id, slug, path, kind, mime_type, size_bytes, is_temp, password_hash, delete_at, created_at"#,
+               RETURNING id, owner_id, slug, path, mime_type, size_bytes, title, syntax, password_hash, delete_at, created_at"#,
             file.id,
             file.owner_id,
             file.slug,
             file.path,
-            file.kind,
             file.mime_type,
             file.size_bytes,
-            file.is_temp,
+            file.title,
+            file.syntax,
             file.password_hash,
             file.delete_at,
             file.created_at
@@ -103,7 +103,7 @@ impl Db {
     pub async fn get_file_by_slug(&self, slug: &str) -> Result<Option<FileRecord>> {
         let rec = sqlx::query_as!(
             FileRecord,
-            r#"SELECT id, owner_id, slug, path, kind, mime_type, size_bytes, is_temp, password_hash, delete_at, created_at
+            r#"SELECT id, owner_id, slug, path, mime_type, size_bytes, title, syntax, password_hash, delete_at, created_at
                FROM files WHERE slug = $1"#,
             slug
         )
@@ -116,7 +116,7 @@ impl Db {
         let rows = if let Some(owner_id) = owner_id {
             sqlx::query_as!(
                 FileRecord,
-                r#"SELECT id, owner_id, slug, path, kind, mime_type, size_bytes, is_temp, password_hash, delete_at, created_at
+                r#"SELECT id, owner_id, slug, path, mime_type, size_bytes, title, syntax, password_hash, delete_at, created_at
                    FROM files WHERE owner_id = $1 ORDER BY created_at DESC"#,
                 owner_id
             )
@@ -124,22 +124,6 @@ impl Db {
             .await?
         } else {
             // nothing as only authenticated users can see files
-            vec![]
-        };
-        Ok(rows)
-    }
-
-    pub async fn list_pastes(&self, owner_id: Option<uuid::Uuid>) -> Result<Vec<PasteRecord>> {
-        let rows = if let Some(owner_id) = owner_id {
-            sqlx::query_as!(
-                PasteRecord,
-                r#"SELECT id, owner_id, slug, title, content, syntax, password_hash, is_temp, created_at
-                   FROM pastes WHERE owner_id = $1 ORDER BY created_at DESC"#,
-                owner_id
-            )
-            .fetch_all(&self.pool)
-            .await?
-        } else {
             vec![]
         };
         Ok(rows)
@@ -160,66 +144,13 @@ impl Db {
         };
         Ok(rows)
     }
+
     pub async fn delete_file_by_slug(&self, slug: &str) -> Result<Option<FileRecord>> {
         let rec = sqlx::query_as!(
             FileRecord,
             r#"DELETE FROM files
                WHERE slug = $1
-               RETURNING id, owner_id, slug, path, kind, mime_type, size_bytes, is_temp, password_hash, delete_at, created_at"#,
-            slug
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(rec)
-    }
-
-    pub async fn insert_paste(
-        &self,
-        owner_id: Option<uuid::Uuid>,
-        slug: &str,
-        title: Option<&str>,
-        content: &str,
-        syntax: Option<&str>,
-        password_hash: Option<&str>,
-        is_temp: bool,
-    ) -> Result<PasteRecord> {
-        let rec = sqlx::query_as!(
-            PasteRecord,
-            r#"INSERT INTO pastes
-                (owner_id, slug, title, content, syntax, password_hash, is_temp)
-               VALUES ($1,$2,$3,$4,$5,$6,$7)
-               RETURNING id, owner_id, slug, title, content, syntax, password_hash, is_temp, created_at"#,
-            owner_id,
-            slug,
-            title,
-            content,
-            syntax,
-            password_hash,
-            is_temp
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(rec)
-    }
-
-    pub async fn get_paste_by_slug(&self, slug: &str) -> Result<Option<PasteRecord>> {
-        let rec = sqlx::query_as!(
-            PasteRecord,
-            r#"SELECT id, owner_id, slug, title, content, syntax, password_hash, is_temp, created_at
-               FROM pastes WHERE slug = $1"#,
-            slug
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(rec)
-    }
-
-    pub async fn delete_paste_by_slug(&self, slug: &str) -> Result<Option<PasteRecord>> {
-        let rec = sqlx::query_as!(
-            PasteRecord,
-            r#"DELETE FROM pastes
-               WHERE slug = $1
-               RETURNING id, owner_id, slug, title, content, syntax, password_hash, is_temp, created_at"#,
+               RETURNING id, owner_id, slug, path, mime_type, size_bytes, title, syntax, password_hash, delete_at, created_at"#,
             slug
         )
         .fetch_optional(&self.pool)

@@ -15,24 +15,12 @@ CREATE TABLE IF NOT EXISTS files (
     owner_id UUID REFERENCES users(id) ON DELETE SET NULL,
     slug TEXT NOT NULL UNIQUE,
     path TEXT NOT NULL,
-    kind TEXT NOT NULL,
     mime_type TEXT NOT NULL,
+	title TEXT NOT NULL,
+	syntax TEXT NOT NULL,
     size_bytes BIGINT NOT NULL,
-    is_temp BOOLEAN NOT NULL DEFAULT FALSE,
     password_hash TEXT,
     delete_at TIMESTAMP,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS pastes (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    owner_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    slug TEXT NOT NULL UNIQUE,
-    title TEXT,
-    content TEXT NOT NULL,
-    syntax TEXT,
-    password_hash TEXT,
-    is_temp BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

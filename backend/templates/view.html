@@ -87,7 +87,7 @@
         <div class="title-area">
             <h1>{{ title }}</h1>
             <div class="meta">
-                Created: {{ created_at }}
+                Created: {{ created_at }} | Type: {{ mime_type }}
             </div>
         </div>
         <div>
@@ -95,7 +95,19 @@
         </div>
     </div>
 
-    <pre><code class="language" style="background: none;">{{ content }}</code></pre>
+    <div class="content-area">
+        {% if mime_type.starts_with("image/") %}
+            <div style="display: flex; justify-content: center;">
+                <img src="/i/raw/{{ slug }}" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 30px rgba(0,0,0,0.3);">
+            </div>
+        {% else if mime_type.starts_with("video/") %}
+            <video controls src="/i/raw/{{ slug }}" style="width: 100%; border-radius: 8px;"></video>
+        {% else if mime_type == "application/pdf" %}
+            <iframe src="/i/raw/{{ slug }}" style="width: 100%; height: 80vh; border: none; border-radius: 8px;"></iframe>
+        {% else %}
+            <pre><code class="language-{{ syntax }}" style="background: none;">{{ content }}</code></pre>
+        {% endif %}
+    </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>

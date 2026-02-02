@@ -1,5 +1,6 @@
 <script lang="ts">
     import {onMount} from "svelte";
+    import {userState} from "$lib/User.svelte.ts";
 
     const backendUrl = import.meta.env.VITE_NXC_BACKEND || "https://nxc.night0721.xyz";
 
@@ -15,16 +16,6 @@
         created_at: string;
     };
 
-    type Paste = {
-        slug: string;
-        title: string;
-        content: string;
-        syntax: string;
-        password_hash: string;
-        is_temp: boolean;
-        created_at: string;
-    };
-
     type Url = {
         slug: string;
         target_url: string;
@@ -34,7 +25,6 @@
     };
 
     let files: File[] = $state([]);
-    let pastes: Paste[] = $state([]);
     let urls: Url[] = $state([]);
     let selectedTab = $state("upload");
     let uploadResult = $state("");
@@ -44,18 +34,24 @@
     let pasteTitle = $state("");
     let pasteLanguage = $state("");
     let urlInput = $state("");
+    let password = $state("");
+    let expiresAt = $state("");
 
     onMount(async () => {
         await loadData();
     });
 
+    // Helper to ensure we send the format Rust expects: %Y-%m-%dT%H:%M:%S
+    function formatExpiry(val: string) {
+        if (!val) return "";
+        // If user picked a date but no seconds, HTML might give YYYY-MM-DDTHH:mm
+        return val.length === 16 ? `${val}:00` : val;
+    }
+
     async function loadData() {
         try {
-            const [filesRes, pastesRes, urlsRes] = await Promise.all([
+            const [filesRes, urlsRes] = await Promise.all([
                 fetch(`${backendUrl}/api/files`, {
-                    credentials: "include"
-                }),
-                fetch(`${backendUrl}/api/pastes`, {
                     credentials: "include"
                 }),
                 fetch(`${backendUrl}/api/urls`, {
@@ -65,8 +61,6 @@
 
             if (filesRes.ok)
                 files = await filesRes.json();
-            if (pastesRes.ok)
-                pastes = await pastesRes.json();
             if (urlsRes.ok)
                 urls = await urlsRes.json();
         } catch (e) {
@@ -74,89 +68,57 @@
         }
     }
 
-    async function handleFileUpload(event: SubmitEvent) {
-        const formData = new FormData(event.target as HTMLFormElement);
+    async function handleUpload(event: SubmitEvent, type: 'file' | 'paste' | 'url') {
+        event.preventDefault();
+        const form = event.target as HTMLFormElement;
+        const formData = new FormData(form);
+
+        // Append formatted expiry if it exists
+        if (expiresAt) {
+            formData.set("expires_at", formatExpiry(expiresAt));
+        }
+
         try {
-            const response = await fetch(`${backendUrl}/api/file`, {
+            const response = await fetch(`${backendUrl}`, {
                 method: "POST",
                 credentials: "include",
                 body: formData
             });
-            if (response.ok) {
-                const result = await response.json();
-                uploadResult = result.url;
-                await loadData();
-            }
-        } catch (e) {
-            console.error("Upload failed:", e);
-        }
-    }
-
-    async function handlePaste(event: SubmitEvent) {
-        const formData = new FormData(event.target as HTMLFormElement);
-        const data = Object.fromEntries(formData.entries());
-		console.log(data)
-
-        try {
-            const response = await fetch(`${backendUrl}/api/paste`, {
-                method: "POST",
-                credentials: "include",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify(data)
-            });
 
             if (response.ok) {
                 const result = await response.json();
-                pasteResult = result.url;
+                if (type === 'file') uploadResult = result.url;
+                if (type === 'paste') pasteResult = result.url;
+                if (type === 'url') urlResult = result.url;
+
+                urlInput = "";
                 pasteContent = "";
                 pasteTitle = "";
                 pasteLanguage = "";
-                await loadData();
-            } else {
-                const errorText = await response.text();
-                console.error("Server rejected paste:", errorText);
-            }
-        } catch (e) {
-            console.error("Paste failed:", e);
-        }
-    }
 
-    async function handleUrlShorten(event: SubmitEvent) {
-        const formData = new FormData(event.target as HTMLFormElement);
-        const data = Object.fromEntries(formData.entries());
-        try {
-            const response = await fetch(`${backendUrl}/api/url`, {
-                method: "POST",
-                credentials: "include",
-                headers: {
-                    "content-type": "application/json"
-                },
-                body: JSON.stringify(data)
-            });
-            if (response.ok) {
-                const result = await response.json();
-                urlResult = result.url;
-                urlInput = "";
+
+                // Reset common fields
+                password = "";
+                expiresAt = "";
                 await loadData();
             }
         } catch (e) {
-            console.error("URL shortening failed:", e);
+            console.error(`${type} failed:`, e);
         }
     }
 
-	async function deleteItem(type: String, id: String) {
-		await fetch(`${backendUrl}/api/${type}/delete`, {
+
+    async function deleteItem(type: String, id: String) {
+        await fetch(`${backendUrl}/api/${type}/delete`, {
             method: "POST",
             credentials: "include",
-			headers: {
+            headers: {
                 "content-type": "application/json"
             },
-            body: JSON.stringify({ id })
+            body: JSON.stringify({id})
         });
-		await loadData();
-	}
+        await loadData();
+    }
 </script>
 
 <div class="container">
@@ -193,6 +155,18 @@
         </div>
     </div>
 
+    {#snippet extraFields()}
+        <div class="grid grid-2" style="gap: 1rem; margin-top: 1rem;">
+            <div class="form-group">
+                <label for="pw">Password (Optional)</label>
+                <input id="pw" type="password" name="password" bind:value={password} placeholder="Protect your link"/>
+            </div>
+            <div class="form-group">
+                <label for="exp">Expires At (Optional)</label>
+                <input id="exp" type="datetime-local" name="expires_at" bind:value={expiresAt}/>
+            </div>
+        </div>
+    {/snippet}
     <!-- Main Content Grid -->
     <div class="grid grid-2">
         <!-- Main Panel -->
@@ -200,21 +174,17 @@
             <div class="card">
                 <!-- File Upload -->
                 {#if selectedTab === "upload"}
+
                     <div class="card-header">
                         <span class="card-icon">📁</span>
                         <h3 class="card-title">Upload File</h3>
                     </div>
-                    <form onsubmit={handleFileUpload}>
+                    <form onsubmit={(e) => handleUpload(e, 'file')}>
                         <div class="form-group">
-                            <input
-                                    type="file"
-                                    name="file"
-                                    required
-                            />
+                            <input type="file" name="file" required/>
                         </div>
-                        <button type="submit" class="btn btn-green btn-full">
-                            Upload File
-                        </button>
+                        {@render extraFields()}
+                        <button type="submit" class="btn btn-green btn-full">Upload</button>
                     </form>
                     {#if uploadResult}
                         <div class="result">
@@ -235,34 +205,20 @@
                         <span class="card-icon">📝</span>
                         <h3 class="card-title">Create Paste</h3>
                     </div>
-                    <form onsubmit={handlePaste}>
+                    <form onsubmit={(e) => handleUpload(e, 'paste')}>
                         <div class="form-group">
-                            <input
-                                    type="text"
-                                    name="title"
-                                    bind:value={pasteTitle}
-                                    placeholder="Title (optional)"
-                            />
+                            <input type="text" name="title" bind:value={pasteTitle} placeholder="Title"/>
                         </div>
                         <div class="form-group">
-                            <textarea
-                                    name="content"
-                                    bind:value={pasteContent}
-                                    placeholder="Paste content"
-                                    required
-                            ></textarea>
+                            <textarea name="content" bind:value={pasteContent} placeholder="Content..."
+                                      required></textarea>
                         </div>
                         <div class="form-group">
-                            <input
-                                    type="text"
-                                    name="syntax"
-                                    bind:value={pasteLanguage}
-                                    placeholder="Language (optional)"
-                            />
+                            <input type="text" name="syntax" bind:value={pasteLanguage}
+                                   placeholder="Language (e.g. rust)"/>
                         </div>
-                        <button type="submit" class="btn btn-primary btn-full">
-                            Create Paste
-                        </button>
+                        {@render extraFields()}
+                        <button type="submit" class="btn btn-primary btn-full">Create Paste</button>
                     </form>
                     {#if pasteResult}
                         <div class="result">
@@ -283,19 +239,12 @@
                         <span class="card-icon">🔗</span>
                         <h3 class="card-title">Shorten URL</h3>
                     </div>
-                    <form onsubmit={handleUrlShorten}>
+                    <form onsubmit={(e) => handleUpload(e, 'url')}>
                         <div class="form-group">
-                            <input
-                                    type="url"
-                                    name="url"
-                                    bind:value={urlInput}
-                                    placeholder="https://example.com"
-                                    required
-                            />
+                            <input type="url" name="url" bind:value={urlInput} placeholder="https://..." required/>
                         </div>
-                        <button type="submit" class="btn btn-mauve btn-full">
-                            Shorten URL
-                        </button>
+                        {@render extraFields()}
+                        <button type="submit" class="btn btn-mauve btn-full">Shorten</button>
                     </form>
                     {#if urlResult}
                         <div class="result">
@@ -303,84 +252,64 @@
                             <a href={urlResult} class="result-link" target="_blank">{urlResult}</a>
                         </div>
                     {/if}
-					<br>
-					<pre>You can either enter text below and click submit to create a link or use CURL/other http client to send POST request for creating links</pre>
-					<pre>CURL example:</pre>
-					<code>{"curl https://nxc.night0721.xyz/api/url -H \"Content-Type: application/json\" -d '{\"url\": \"https://night0721.xyz\"}'"}</code>
-					<pre>Server will respond with a JSON object with URL to shortened link</pre>
-                {/if} 
+                    <br>
+                    <pre>You can either enter text below and click submit to create a link or use CURL/other http client to send POST request for creating links</pre>
+                    <pre>CURL example:</pre>
+                    <code>{"curl https://nxc.night0721.xyz/api/url -H \"Content-Type: application/json\" -d '{\"url\": \"https://night0721.xyz\"}'"}</code>
+                    <pre>Server will respond with a JSON object with URL to shortened link</pre>
+                {/if}
             </div>
         </div>
 
         <!-- Sidebar -->
-        <div class="sidebar">
-            <!-- Recent Files -->
-            <div class="sidebar-section">
-                <h3 class="sidebar-title">
-                    <span class="sidebar-icon">📁</span>
-                    Recent Files
-                </h3>
-                <div class="item-list">
-                    {#each files.slice(0, 5) as file}
-                        <div class="item">
-                            <span class="item-name">{file.path.split('/').pop()}</span>
-                            <a href={`${backendUrl}/i/${file.slug}`} class="item-link">View</a>
-                            <a href={`${backendUrl}/i/raw/${file.slug}`} class="item-link">Download</a>
-                            <button class="item-link" onclick={deleteItem("file", file.slug)}>Delete</button>
-                        </div>
-                    {:else}
-                        <div class="empty-state">
-                            <span class="empty-icon">📂</span>
-                            <p class="empty-text">No files yet</p>
-                        </div>
-                    {/each}
+        {#if userState.user}
+            <div class="sidebar">
+                <!-- Recent Files -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-title">
+                        <span class="sidebar-icon">📁</span>
+                        Recent Files
+                    </h3>
+                    <div class="item-list">
+                        {#each files.slice(0, 5) as file}
+                            <div class="item">
+                                <span class="item-name">{file.path.split('/').pop()}</span>
+                                <a href={`${backendUrl}/i/${file.slug}`} class="item-link">View</a>
+                                <a href={`${backendUrl}/i/raw/${file.slug}`} class="item-link">Raw</a>
+                                <a href={`${backendUrl}/i/bin/${file.slug}`} class="item-link">Download</a>
+                                <button class="item-link" onclick={deleteItem("file", file.slug)}>Delete</button>
+                            </div>
+                        {:else}
+                            <div class="empty-state">
+                                <span class="empty-icon">📂</span>
+                                <p class="empty-text">No files yet</p>
+                            </div>
+                        {/each}
+                    </div>
                 </div>
-            </div>
 
-            <!-- Recent Pastes -->
-            <div class="sidebar-section">
-                <h3 class="sidebar-title">
-                    <span class="sidebar-icon">📝</span>
-                    Recent Pastes
-                </h3>
-                <div class="item-list">
-                    {#each pastes.slice(0, 5) as paste}
-                        <div class="item">
-                            <span class="item-name">{paste.title || "Untitled"}</span>
-                            <a href={`${backendUrl}/p/${paste.slug}`} class="item-link">View</a>
-                            <a href={`${backendUrl}/p/raw/${paste.slug}`} class="item-link">Raw</a>
-                            <button class="item-link" onclick={deleteItem("paste", paste.slug)}>Delete</button>
-                        </div>
-                    {:else}
-                        <div class="empty-state">
-                            <span class="empty-icon">📄</span>
-                            <p class="empty-text">No pastes yet</p>
-                        </div>
-                    {/each}
+                <!-- Recent URLs -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-title">
+                        <span class="sidebar-icon">🔗</span>
+                        Recent URLs
+                    </h3>
+                    <div class="item-list">
+                        {#each urls.slice(0, 5) as url}
+                            <div class="item">
+                                <span class="item-name item-code">{url.slug}({url.target_url})</span>
+                                <a href={`${backendUrl}/s/${url.slug}`} class="item-link">Go</a>
+                                <button class="item-link" onclick={deleteItem("url", url.slug)}>Delete</button>
+                            </div>
+                        {:else}
+                            <div class="empty-state">
+                                <span class="empty-icon">🔗</span>
+                                <p class="empty-text">No URLs yet</p>
+                            </div>
+                        {/each}
+                    </div>
                 </div>
             </div>
-
-            <!-- Recent URLs -->
-            <div class="sidebar-section">
-                <h3 class="sidebar-title">
-                    <span class="sidebar-icon">🔗</span>
-                    Recent URLs
-                </h3>
-                <div class="item-list">
-                    {#each urls.slice(0, 5) as url}
-                        <div class="item">
-                            <span class="item-name item-code">{url.slug}({url.target_url})</span>
-                            <a href={`${backendUrl}/s/${url.slug}`} class="item-link">Go</a>
-                            <button class="item-link" onclick={deleteItem("url", url.slug)}>Delete</button>
-                        </div>
-                    {:else}
-                        <div class="empty-state">
-                            <span class="empty-icon">🔗</span>
-                            <p class="empty-text">No URLs yet</p>
-                        </div>
-                    {/each}
-                </div>
-            </div>
-        </div>
+        {/if}
     </div>
 </div>

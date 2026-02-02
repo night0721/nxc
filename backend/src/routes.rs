@@ -8,10 +8,10 @@ use crate::security::{
 use anyhow::Result;
 use askama::Template;
 use axum::body::Body;
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, get_service, post};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use oauth2::{
@@ -26,7 +26,9 @@ use std::fs;
 use std::path::Path as FsPath;
 use std::sync::Arc;
 use time::OffsetDateTime;
+use tokio::fs as tfs;
 use tokio::fs::File as TokioFile;
+use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
@@ -69,23 +71,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/auth/github/callback", get(github_callback))
         .route("/auth/me", get(get_current_user))
         .route("/auth/logout", post(logout))
+        .route("/", get_service(serve_dir.clone()).post(universal_upload))
         // url shortener
-        .route("/api/url", post(create_url))
         .route("/s/:slug", get(resolve_url))
-        // pastebin
-        .route("/api/paste", post(create_paste))
-        .route("/p/:slug", get(view_paste))
-        .route("/p/raw/:slug", get(raw_paste))
         // files
-        .route("/api/file", post(upload_file))
-        .route("/i/:slug", get(view_file))
-        .route("/i/bin/:slug", get(raw_file))
+        .route("/i/:slug", get(view_handler))
+        .route("/i/:mode/:slug", get(serve_file_handler))
         // misc
         .route("/api/files", get(list_files))
-        .route("/api/pastes", get(list_pastes))
         .route("/api/urls", get(list_urls))
         .route("/api/:kind/delete", post(delete_any))
         .route("/api/webhooks", post(create_webhook))
+        .layer(DefaultBodyLimit::max(1024 * 1024 * 100))
         .with_state(state.clone())
         .fallback_service(serve_dir)
         .layer(
@@ -290,84 +287,189 @@ async fn logout(jar: CookieJar) -> impl IntoResponse {
     (jar.add(cookie), StatusCode::OK)
 }
 
-// URL Shortener
-
-#[derive(Deserialize)]
-struct CreateUrlBody {
-    url: String,
-    password: Option<String>,
-    expires_at: Option<String>,
-}
-
-#[derive(Serialize)]
-struct UrlResponse {
-    id: String,
-    short_url: String,
-}
-
-async fn create_url(
+async fn universal_upload(
     State(state): State<Arc<AppState>>,
     auth: Option<AuthCtx>,
-    Json(body): Json<CreateUrlBody>,
+    mut multipart: axum::extract::Multipart,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     let owner_id = auth.map(|a| a.user_id);
     let slug = gen_slug(7);
-    let delete_hash = if let Some(password) = body.password.as_deref() {
-        Some(
-            hash_password(password)
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "hash error"))?,
-        )
-    } else {
-        None
-    };
 
-    let expires_at = if let Some(s) = body.expires_at.as_deref() {
-        Some(
-            NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
-                .map_err(|_| (StatusCode::BAD_REQUEST, "invalid expires_at"))?,
-        )
-    } else {
-        None
-    };
+    // Temp storage for multipart parsing
+    let mut url_val: Option<String> = None;
+    let mut content_val: Option<String> = None;
+    let mut title_val: Option<String> = None;
+    let mut syntax_val: Option<String> = None;
+    let mut password_val: Option<String> = None;
+    let mut expires_val: Option<String> = None;
+    let mut file_data: Option<(String, String, i64)> = None; // (Path, Mime, Size)
 
-    let rec = state
-        .db
-        .insert_url(
-            owner_id,
-            &slug,
-            &body.url,
-            delete_hash.as_deref(),
-            expires_at,
-        )
+    while let Some(mut field) = multipart
+        .next_field()
         .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
+        .map_err(|_| (StatusCode::BAD_REQUEST, "multipart error"))?
+    {
+        let name = field.name().unwrap_or("").to_string();
 
-    let msg = format!("New url created: {}/s/{}", state.config.base_url, rec.slug);
+        match name.as_str() {
+            "url" => url_val = Some(field.text().await.unwrap_or_default()),
+            "content" => content_val = Some(field.text().await.unwrap_or_default()),
+            "title" => title_val = Some(field.text().await.unwrap_or_default()),
+            "syntax" => syntax_val = Some(field.text().await.unwrap_or_default()),
+            "password" => password_val = Some(field.text().await.unwrap_or_default()),
+            "expires_at" => expires_val = Some(field.text().await.unwrap_or_default()),
+            "file" => {
+                let filename = field.file_name().map(|s| s.to_string());
+                let mime = field
+                    .content_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                let dir = FsPath::new(&state.config.data_dir).join(&slug);
+                tfs::create_dir_all(&dir)
+                    .await
+                    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
 
-    let hooks = state
-        .db
-        .get_active_webhooks_for_event(owner_id, "paste.created")
-        .await
-        .map_err(|e| {
-            tracing::error!("Webhook fetch error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to fetch webhooks",
+                let fname = filename.unwrap_or_else(|| slug.clone());
+                let full_path = dir.join(&fname);
+                let mut f = TokioFile::create(&full_path)
+                    .await
+                    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
+
+                let mut size_bytes = 0;
+                while let Some(chunk) = field
+                    .chunk()
+                    .await
+                    .map_err(|_| (StatusCode::BAD_REQUEST, "read error"))?
+                {
+                    f.write_all(&chunk)
+                        .await
+                        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "write error"))?;
+                    size_bytes += chunk.len() as i64;
+                }
+                file_data = Some((full_path.to_string_lossy().to_string(), mime, size_bytes));
+                if title_val.is_none() {
+                    title_val = Some(fname);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let expires_at = expires_val.and_then(|s| {
+        // We try a few formats just in case
+        NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
+            .or_else(|_| NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M"))
+            .ok()
+    });
+
+    let password_hash = password_val
+        .filter(|p| !p.trim().is_empty()) // Don't hash empty strings
+        .map(|p| hash_password(&p).unwrap_or_default());
+
+    // URL Shortener
+    if let Some(target) = url_val {
+        let rec = state
+            .db
+            .insert_url(
+                owner_id,
+                &slug,
+                &target,
+                password_hash.as_deref(),
+                expires_at,
             )
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
+
+        let msg = format!(
+            "New url: {}/s/{} => {}",
+            state.config.base_url, rec.slug, target
+        );
+        dispatch_webhooks(&state, owner_id, "url.created", rec, msg).await;
+
+        return Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": slug, "url": format!("{}/s/{}", state.config.base_url, slug) }))).into_response());
+    }
+
+    let final_rec = if let Some((path, mime, size)) = file_data {
+        // It was a real file
+        Some(FileRecord {
+            id: Uuid::new_v4(),
+            owner_id,
+            slug: slug.clone(),
+            path,
+            mime_type: mime.clone(),
+            size_bytes: size,
+            title: title_val.clone(),
+            syntax: Some(syntax_val.clone().unwrap_or_default()),
+            password_hash: password_hash.clone(),
+            delete_at: expires_at,
+            created_at: Utc::now(),
+        })
+    } else if let Some(content) = content_val {
+        // It was a paste, so we make it a file
+        let dir = FsPath::new(&state.config.data_dir).join(&slug);
+        fs::create_dir_all(&dir).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
+        let full_path = dir.join(format!("{}.txt", slug));
+
+        fs::write(&full_path, &content)
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "write error"))?;
+        Some(FileRecord {
+            id: Uuid::new_v4(),
+            owner_id,
+            slug: slug.clone(),
+            path: full_path.to_string_lossy().to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: content.len() as i64,
+            title: title_val.clone(),
+            syntax: Some(syntax_val.clone().unwrap_or_default()),
+            password_hash: password_hash.clone(),
+            delete_at: expires_at,
+            created_at: Utc::now(),
+        })
+    } else {
+        None
+    };
+
+    if let Some(rec) = final_rec {
+        let rec = state.db.insert_file(&rec).await.map_err(|e| {
+            eprintln!("❌ DATABASE ERROR: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "db error")
         })?;
-    crate::webhooks::dispatch(hooks, "url.created".to_string(), rec.clone(), msg);
 
-    let short_url = format!("{}/s/{}", state.config.base_url, rec.slug);
+        let msg = format!("New file: {}/i/{}", state.config.base_url, rec.slug);
+        dispatch_webhooks(&state, owner_id, "file.created", rec, msg).await;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(UrlResponse {
-            id: rec.slug,
-            short_url,
-        }),
+        return Ok((
+            StatusCode::CREATED,
+            Json(UploadResponse {
+                id: slug.clone(),
+                url: format!("{}/i/{}", state.config.base_url, slug),
+                raw_url: format!("{}/i/raw/{}", state.config.base_url, slug),
+                bin_url: format!("{}/i/bin/{}", state.config.base_url, slug),
+            }),
+        )
+            .into_response());
+    }
+
+    Err((
+        StatusCode::BAD_REQUEST,
+        "Empty request: provide 'url', 'file', or 'content'",
     ))
 }
 
+// Helper to keep the main logic clean
+async fn dispatch_webhooks<T: Serialize + Clone + Send + 'static>(
+    state: &Arc<AppState>,
+    owner: Option<Uuid>,
+    event: &str,
+    data: T,
+    msg: String,
+) {
+    if let Ok(hooks) = state.db.get_active_webhooks_for_event(owner, event).await {
+        crate::webhooks::dispatch(hooks, event.to_string(), data, msg);
+    }
+}
+
+// URL Shortener
 #[derive(Deserialize)]
 struct UrlQuery {
     password: Option<String>,
@@ -406,99 +508,9 @@ async fn resolve_url(
 }
 
 // Pastebin
-
-#[derive(Deserialize)]
-struct CreatePasteBody {
-    content: String,
-    title: Option<String>,
-    syntax: Option<String>,
-    password: Option<String>,
-    temp: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct PasteResponse {
-    id: String,
-    url: String,
-    raw_url: String,
-}
-
-async fn create_paste(
-    State(state): State<Arc<AppState>>,
-    auth: Option<AuthCtx>,
-    Json(body): Json<CreatePasteBody>,
-) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    if body.content.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "empty content"));
-    }
-    let owner_id = auth.map(|a| a.user_id);
-    let slug = gen_slug(7);
-    let hash = if let Some(password) = body.password.as_deref() {
-        Some(
-            hash_password(password)
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "hash error"))?,
-        )
-    } else {
-        None
-    };
-
-    let rec = state
-        .db
-        .insert_paste(
-            owner_id,
-            &slug,
-            body.title.as_deref(),
-            &body.content,
-            body.syntax.as_deref(),
-            hash.as_deref(),
-            body.temp.unwrap_or(false),
-        )
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
-
-    let msg = format!(
-        "New paste created: {}/p/{}",
-        state.config.base_url, rec.slug
-    );
-
-    let hooks = state
-        .db
-        .get_active_webhooks_for_event(owner_id, "paste.created")
-        .await
-        .map_err(|e| {
-            tracing::error!("Webhook fetch error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to fetch webhooks",
-            )
-        })?;
-    crate::webhooks::dispatch(hooks, "paste.created".to_string(), rec.clone(), msg);
-
-    let url = format!("{}/p/{}", state.config.base_url, rec.slug);
-    let raw_url = format!("{}/p/raw/{}", state.config.base_url, rec.slug);
-
-    Ok((
-        StatusCode::CREATED,
-        Json(PasteResponse {
-            id: rec.slug,
-            url,
-            raw_url,
-        }),
-    ))
-}
-
 #[derive(Deserialize)]
 struct PasteQuery {
     password: Option<String>,
-}
-
-#[derive(Template)]
-#[template(path = "view.html")] // This looks in the /templates folder
-struct PasteTemplate {
-    title: String,
-    content: String,
-    syntax: String,
-    created_at: String,
 }
 
 fn access_verify(
@@ -522,180 +534,67 @@ fn access_verify(
     Ok(())
 }
 
-async fn view_paste(
+#[derive(Template)]
+#[template(path = "view.html")]
+struct ViewTemplate {
+    title: String,
+    created_at: String,
+    syntax: String,
+    content: String,
+    slug: String,
+    mime_type: String,
+}
+
+async fn view_handler(
     State(state): State<Arc<AppState>>,
     Path(slug): Path<String>,
     Query(q): Query<PasteQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     let rec = state
         .db
-        .get_paste_by_slug(&slug)
+        .get_file_by_slug(&slug)
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
         .ok_or((StatusCode::NOT_FOUND, "not found"))?;
 
     access_verify(rec.password_hash.as_deref(), q.password.as_deref())?;
 
-    let template = PasteTemplate {
-        title: rec.title.clone().unwrap_or_else(|| "Untitled Paste".into()),
-        content: rec.content,
-        syntax: rec
-            .syntax
-            .clone()
-            .unwrap_or_else(|| "plaintext".to_string()),
-        created_at: rec.created_at.to_rfc3339(),
+    // 2. Prepare content if it's a text file/paste
+    let is_text = rec.mime_type.starts_with("text/") || rec.syntax.is_some();
+
+    let content = if is_text {
+        // Only read into memory if we actually need to highlight it
+        tokio::fs::read_to_string(&rec.path)
+            .await
+            .unwrap_or_else(|_| "Error reading file content".to_string())
+    } else {
+        String::new() // Binary files don't need 'content' in the HTML
     };
 
-    Ok(template)
+    Ok(ViewTemplate {
+        title: rec.title.unwrap_or_else(|| rec.slug.clone()),
+        created_at: rec.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+        syntax: rec.syntax.unwrap_or_else(|| "plaintext".to_string()),
+        slug: rec.slug,
+        mime_type: rec.mime_type,
+        content,
+    })
 }
 
-async fn raw_paste(
-    State(state): State<Arc<AppState>>,
-    Path(slug): Path<String>,
-    Query(q): Query<PasteQuery>,
-) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    let rec = state
-        .db
-        .get_paste_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
-        .ok_or((StatusCode::NOT_FOUND, "not found"))?;
-
-    access_verify(rec.password_hash.as_deref(), q.password.as_deref())?;
-
-    Ok((
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        rec.content,
-    )
-        .into_response())
-}
-
-// File upload
+// Files
 
 #[derive(Serialize)]
 struct UploadResponse {
     id: String,
     url: String,
     raw_url: String,
+    bin_url: String,
 }
 
-async fn upload_file(
+async fn serve_file_handler(
     State(state): State<Arc<AppState>>,
-    auth: Option<AuthCtx>,
-    mut multipart: axum::extract::Multipart,
-) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    let owner_id = auth.map(|a| a.user_id);
-    let slug = gen_slug(7);
-
-    let mut mime = "application/octet-stream".to_string();
-    let mut full_path = std::path::PathBuf::new();
-    let mut size_bytes = 0;
-
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid multipart"))?
-    {
-        if field.name() == Some("file") {
-            let filename = field.file_name().map(|s| s.to_string());
-            if let Some(ct) = field.content_type() {
-                mime = ct.to_string();
-            }
-            let dir = FsPath::new(&state.config.data_dir).join(&slug);
-            fs::create_dir_all(&dir)
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
-            let fname = filename.clone().unwrap_or_else(|| format!("{slug}"));
-            full_path = dir.join(&fname);
-            let mut f = TokioFile::create(&full_path)
-                .await
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "fs error"))?;
-
-            // Stream chunk from field to f
-            while let Some(chunk) = field
-                .chunk()
-                .await
-                .map_err(|_| (StatusCode::BAD_REQUEST, "read error"))?
-            {
-                tokio::io::copy(&mut &chunk[..], &mut f)
-                    .await
-                    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "write error"))?;
-                size_bytes += chunk.len() as i64;
-            }
-            break;
-        }
-    }
-
-    // determine kind
-    let kind = if mime.starts_with("image/") {
-        "image"
-    } else if mime.starts_with("video/") {
-        "video"
-    } else {
-        "file"
-    }
-    .to_string();
-
-    if size_bytes == 0 {
-        return Err((StatusCode::BAD_REQUEST, "empty file"));
-    }
-
-    // Generate UUID v4 using rand
-    let mut bytes = [0u8; 16];
-    rand::thread_rng().fill(&mut bytes);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
-    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant 10
-
-    let rec = FileRecord {
-        id: Uuid::from_bytes(bytes),
-        owner_id,
-        slug: slug.clone(),
-        path: full_path.to_string_lossy().to_string(),
-        kind,
-        mime_type: mime.clone(),
-        size_bytes,
-        is_temp: false,
-        password_hash: None,
-        delete_at: None,
-        created_at: Utc::now(),
-    };
-
-    let rec = state
-        .db
-        .insert_file(&rec)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
-
-    let msg = format!("New file created: {}/i/{}", state.config.base_url, rec.slug);
-
-    let hooks = state
-        .db
-        .get_active_webhooks_for_event(owner_id, "paste.created")
-        .await
-        .map_err(|e| {
-            tracing::error!("Webhook fetch error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to fetch webhooks",
-            )
-        })?;
-    crate::webhooks::dispatch(hooks, "file.created".to_string(), rec.clone(), msg);
-
-    let url = format!("{}/i/{}", state.config.base_url, rec.slug);
-    let raw_url = format!("{}/i/bin/{}", state.config.base_url, rec.slug);
-
-    Ok((
-        StatusCode::CREATED,
-        Json(UploadResponse {
-            id: rec.slug,
-            url,
-            raw_url,
-        }),
-    ))
-}
-
-async fn view_file(
-    State(state): State<Arc<AppState>>,
-    Path(slug): Path<String>,
+    Path((mode, slug)): Path<(String, String)>, // mode is "raw" or "bin"
+    Query(q): Query<UrlQuery>,
 ) -> Result<Response, (StatusCode, &'static str)> {
     let rec = state
         .db
@@ -704,21 +603,11 @@ async fn view_file(
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
         .ok_or((StatusCode::NOT_FOUND, "not found"))?;
 
-    serve_file(&rec.path, &rec.mime_type, false).await
-}
+    // Verification
+    access_verify(rec.password_hash.as_deref(), q.password.as_deref())?;
 
-async fn raw_file(
-    State(state): State<Arc<AppState>>,
-    Path(slug): Path<String>,
-) -> Result<Response, (StatusCode, &'static str)> {
-    let rec = state
-        .db
-        .get_file_by_slug(&slug)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
-        .ok_or((StatusCode::NOT_FOUND, "not found"))?;
-
-    serve_file(&rec.path, &rec.mime_type, true).await
+    let as_attachment = mode == "bin";
+    serve_file(&rec.path, &rec.mime_type, as_attachment).await
 }
 
 async fn serve_file(
@@ -762,20 +651,6 @@ async fn list_files(
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
 
     Ok(Json(files))
-}
-
-async fn list_pastes(
-    State(state): State<Arc<AppState>>,
-    auth: Option<AuthCtx>,
-) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    let owner = auth.map(|a| a.user_id);
-    let pastes = state
-        .db
-        .list_pastes(owner)
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
-
-    Ok(Json(pastes))
 }
 
 async fn list_urls(
@@ -826,24 +701,6 @@ async fn delete_any(
                 .await
                 .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
             let _ = fs::remove_file(&rec.path);
-        }
-        "paste" => {
-            let rec = state
-                .db
-                .get_paste_by_slug(&body.id)
-                .await
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?
-                .ok_or((StatusCode::NOT_FOUND, "not found"))?;
-
-            if rec.owner_id != Some(user_id) {
-                return Err((StatusCode::FORBIDDEN, "denied"));
-            }
-
-            state
-                .db
-                .delete_paste_by_slug(&body.id)
-                .await
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "db error"))?;
         }
         "url" => {
             let rec = state
@@ -896,11 +753,7 @@ pub async fn create_webhook(
         owner_id: user_id,
         target_url: body.target_url,
         secret: gen_slug(32),
-        events: vec![
-            "url.created".to_string(),
-            "paste.created".to_string(),
-            "file.created".to_string(),
-        ],
+        events: vec!["url.created".to_string(), "file.created".to_string()],
         active: true,
         created_at: chrono::Utc::now(),
     };

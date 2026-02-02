@@ -19,25 +19,12 @@ pub struct FileRecord {
     pub owner_id: Option<Uuid>,
     pub slug: String,
     pub path: String,
-    pub kind: String,
     pub mime_type: String,
     pub size_bytes: i64,
-    pub is_temp: bool,
-    pub password_hash: Option<String>,
-    pub delete_at: Option<NaiveDateTime>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize)]
-pub struct PasteRecord {
-    pub id: Uuid,
-    pub owner_id: Option<Uuid>,
-    pub slug: String,
     pub title: Option<String>,
-    pub content: String,
     pub syntax: Option<String>,
     pub password_hash: Option<String>,
-    pub is_temp: bool,
+    pub delete_at: Option<NaiveDateTime>,
     pub created_at: DateTime<Utc>,
 }
 
