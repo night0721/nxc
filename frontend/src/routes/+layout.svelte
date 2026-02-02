@@ -38,8 +38,15 @@
 
     export async function logout() {
         try {
-            await fetch(`${backendUrl}/api/logout`, {method: "POST"});
-            window.location.reload();
+            const response = await fetch(`${backendUrl}/auth/logout`, {
+            method: "POST",
+            credentials: "include"
+        });
+
+        if (response.ok) {
+            user = null;
+            window.location.href = "/";
+        }
         } catch (e) {
             console.error("Failed to logout:", e);
         }
@@ -48,6 +55,7 @@
     export async function addWebhook(url: String) {
         await fetch(`${backendUrl}/api/webhooks`, {
             method: "POST",
+			credentials: "include",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({target_url: url})
         });

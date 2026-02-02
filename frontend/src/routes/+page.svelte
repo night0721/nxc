@@ -95,6 +95,7 @@
     async function handlePaste(event: SubmitEvent) {
         const formData = new FormData(event.target as HTMLFormElement);
         const data = Object.fromEntries(formData.entries());
+		console.log(data)
 
         try {
             const response = await fetch(`${backendUrl}/api/paste`, {
@@ -130,7 +131,7 @@
                 method: "POST",
                 credentials: "include",
                 headers: {
-                    "Content-Type": "application/json"
+                    "content-type": "application/json"
                 },
                 body: JSON.stringify(data)
             });
@@ -144,6 +145,18 @@
             console.error("URL shortening failed:", e);
         }
     }
+
+	async function deleteItem(type: String, id: String) {
+		await fetch(`${backendUrl}/api/${type}/delete`, {
+            method: "POST",
+            credentials: "include",
+			headers: {
+                "content-type": "application/json"
+            },
+            body: JSON.stringify({ id })
+        });
+		await loadData();
+	}
 </script>
 
 <div class="container">
@@ -313,12 +326,7 @@
                             <span class="item-name">{file.path.split('/').pop()}</span>
                             <a href={`${backendUrl}/i/${file.slug}`} class="item-link">View</a>
                             <a href={`${backendUrl}/i/raw/${file.slug}`} class="item-link">Download</a>
-                            <button class="item-link"
-                            onclick={async () => {await fetch(`${backendUrl}/api/file/delete`, {
-                                method: "POST",
-                                credentials: "include",
-                                body: JSON.stringify({ id: file.slug })
-                            })}}>Delete</button>
+                            <button class="item-link" onclick={deleteItem("file", file.slug)}>Delete</button>
                         </div>
                     {:else}
                         <div class="empty-state">
@@ -341,12 +349,7 @@
                             <span class="item-name">{paste.title || "Untitled"}</span>
                             <a href={`${backendUrl}/p/${paste.slug}`} class="item-link">View</a>
                             <a href={`${backendUrl}/p/raw/${paste.slug}`} class="item-link">Raw</a>
-                            <button class="item-link"
-                                    onclick={async () => {await fetch(`${backendUrl}/api/paste/delete`, {
-                                method: "POST",
-                                credentials: "include",
-                                body: JSON.stringify({ id: paste.slug })
-                            })}}>Delete</button>
+                            <button class="item-link" onclick={deleteItem("paste", paste.slug)}>Delete</button>
                         </div>
                     {:else}
                         <div class="empty-state">
@@ -368,12 +371,7 @@
                         <div class="item">
                             <span class="item-name item-code">{url.slug}({url.target_url})</span>
                             <a href={`${backendUrl}/s/${url.slug}`} class="item-link">Go</a>
-                            <button class="item-link"
-                                    onclick={async () => {await fetch(`${backendUrl}/api/url/delete`, {
-                                method: "POST",
-                                credentials: "include",
-                                body: JSON.stringify({ id: url.slug })
-                            })}}>Delete</button>
+                            <button class="item-link" onclick={deleteItem("url", url.slug)}>Delete</button>
                         </div>
                     {:else}
                         <div class="empty-state">

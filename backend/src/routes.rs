@@ -1,6 +1,7 @@
 use crate::config::AppConfig;
 use crate::db::Db;
 use crate::models::{FileRecord, WebhookRecord};
+use crate::security::SESSION_COOKIE;
 use crate::security::{
     build_session_cookie, hash_password, verify_password, AuthCtx, SessionClaims,
 };
@@ -12,7 +13,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use axum_extra::extract::cookie::CookieJar;
+use axum_extra::extract::cookie::{Cookie, CookieJar};
 use oauth2::{
     basic::BasicClient, basic::BasicErrorResponseType, reqwest::Error as ReqwestError, AuthUrl,
     AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, RequestTokenError, Scope,
@@ -67,6 +68,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/auth/github/login", get(github_login))
         .route("/auth/github/callback", get(github_callback))
         .route("/auth/me", get(get_current_user))
+        .route("/auth/logout", post(logout))
         // url shortener
         .route("/api/url", post(create_url))
         .route("/s/:slug", get(resolve_url))
@@ -276,6 +278,16 @@ async fn get_current_user(
         .ok_or((StatusCode::UNAUTHORIZED, "unknown session"))?;
 
     Ok(Json(user))
+}
+
+async fn logout(jar: CookieJar) -> impl IntoResponse {
+    // Remove the "session" cookie by adding a removal cookie to the jar
+    let cookie = Cookie::build((SESSION_COOKIE, ""))
+        .path("/")
+        .max_age(time::Duration::ZERO) // Expire immediately
+        .http_only(true)
+        .build();
+    (jar.add(cookie), StatusCode::OK)
 }
 
 // URL Shortener
