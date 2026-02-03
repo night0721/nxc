@@ -274,7 +274,7 @@
                     <div class="item-list">
                         {#each files.slice(0, 5) as file}
                             <div class="item">
-                                <span class="item-name">{file.path.split('/').pop()}</span>
+                                <span class="item-name">{file.title} ({file.path.split('/').pop()})</span>
                                 <a href={`${backendUrl}/i/${file.slug}`} class="item-link">View</a>
                                 <a href={`${backendUrl}/i/raw/${file.slug}`} class="item-link">Raw</a>
                                 <a href={`${backendUrl}/i/bin/${file.slug}`} class="item-link">Download</a>
